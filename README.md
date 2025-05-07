@@ -11,13 +11,15 @@ A terminal-based process manager inspired by the classic Doom game. Built with T
 ## Installation
 
 ```bash
-uv install -e .
+uv pip install psdoom
 ```
 
 ## Usage
 
 ```bash
-uv run python -mpsdoom
+uv run python -m psdoom
 ```
 
 This gives you a TUI that should make it easy to find processes that you want to terminate.
+
+![image](https://github.com/user-attachments/assets/da630e26-f5da-4732-99fe-e8fb369d1001)
