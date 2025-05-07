@@ -20,4 +20,4 @@ uv install -e .
 uv run python -mpsdoom
 ```
 
-This gives you a TUI that should make it easy to find processes that you want to terminate.# psdoom
+This gives you a TUI that should make it easy to find processes that you want to terminate.
