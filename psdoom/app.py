@@ -62,7 +62,7 @@ class PSDoomApp(App):
     """The main PSDoom application."""
     
     TITLE = "PSDoom - Terminal Process Manager"
-    SUB_TITLE = "Kill processes Doom-style!"
+    SUB_TITLE = "Kill processes"
     
     DEFAULT_CSS = """
     Screen {

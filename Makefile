@@ -6,6 +6,7 @@ install:
 clean:
 	rm -rf .pytest_cache
 	rm -rf */__pycache__
+	rm -rf dist
 
 pypi: clean
 	uv build
