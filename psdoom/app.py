@@ -98,6 +98,7 @@ class PSDoomApp(App):
     
     #process-table {
         height: 1fr;
+        width: 100%;
         margin-bottom: 1;
         border: solid #555555;
     }
@@ -120,8 +121,8 @@ class PSDoomApp(App):
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
         Binding("ctrl+k", "kill", "Kill"),
-        Binding("enter", "focus_search", "Search"),
         Binding("escape", "focus_table", "Table"),
+        Binding("s", "focus_search", "Search"),
     ]
     
     search_term = reactive("")
