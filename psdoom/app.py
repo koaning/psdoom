@@ -9,53 +9,16 @@ from pathlib import Path
 from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import Header, Footer, Input, DataTable, Static
+from textual.widgets import Header, Footer, Input, DataTable, Static, Button
+from textual.events import Key
 from textual.reactive import reactive
 from textual.binding import Binding
+from textual.keys import Keys
 
 from psdoom.process_manager import ProcessManager
 
 
-class ProcessKillScreen(Static):
-    """Screen shown when killing a process."""
-    
-    DEFAULT_CSS = """
-    ProcessKillScreen {
-        width: 100%;
-        height: 100%;
-        background: rgba(15, 0, 0, 0.85);
-        align: center middle;
-    }
-    
-    #kill-container {
-        width: 50%;
-        height: 15;
-        background: #333333;
-        padding: 1 2;
-        border: thick #cc0000;
-    }
-    
-    #kill-container Static {
-        text-align: center;
-        margin-bottom: 1;
-    }
-    """
-    
-    def __init__(self, pid: int, process_name: str):
-        super().__init__()
-        self.pid = pid
-        self.process_name = process_name
-        
-    def compose(self) -> ComposeResult:
-        with Container(id="kill-container"):
-            yield Static(f"[bold red]KILLING PROCESS[/]")
-            yield Static(f"PID: {self.pid}")
-            yield Static(f"Name: {self.process_name}")
-            yield Static("[blink]* * * KABOOM * * *[/blink]")
-
-    async def on_mount(self) -> None:
-        await asyncio.sleep(2)
-        self.remove()
+# We'll replace the kill screen with notifications
 
 
 class PSDoomApp(App):
@@ -118,11 +81,15 @@ class PSDoomApp(App):
     """
     
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
+        # Remove 'q' binding since Ctrl+Q conflicts with other apps
+        # We'll handle exit with Ctrl+C instead
         Binding("r", "refresh", "Refresh"),
-        Binding("ctrl+k", "kill", "Kill"),
         Binding("escape", "focus_table", "Table"),
         Binding("s", "focus_search", "Search"),
+        # Add the k shortcut that will show in the footer all the time
+        Binding("k", "kill", "Kill Process"),
+        # Add enter key for selecting rows
+        Binding("enter", "select_item", "Select Process"),
     ]
     
     search_term = reactive("")
@@ -131,6 +98,7 @@ class PSDoomApp(App):
     def __init__(self):
         super().__init__()
         self.process_manager = ProcessManager()
+        self.last_ctrl_c_time = 0  # Track time of last Ctrl+C press
     
     def compose(self) -> ComposeResult:
         """Compose the UI."""
@@ -160,11 +128,19 @@ class PSDoomApp(App):
             3: 10      # Status column
         }
         
-        # Make table focusable and focus it by default
+        # Make table focusable
         table.can_focus = True
-        table.focus()
         
+        # The 'k' key info is already in the subtitle
+        # No need to change it dynamically
+        
+        # Initial process list
         self.refresh_process_list()
+        
+        # Focus the search input on startup
+        self.query_one("#search-input", Input).focus()
+        
+
     
     def refresh_process_list(self) -> None:
         """Refresh the process list based on current search term."""
@@ -232,7 +208,36 @@ class PSDoomApp(App):
         row = event.data_table.get_row(event.row_key)
         if row:
             self.selected_pid = int(row[0])
-            details = f"Selected: [bold]{row[1]}[/] (PID: {row[0]}) - Press [bold red]'ctrl+k'[/] to kill"
+            # Update footer message when a process is selected
+            proc_name = row[1]
+            pid = row[0]
+            self.notify(f"Selected: {proc_name} (PID: {pid}) - Press 'k' to kill", timeout=3)
+    
+    @on(Key)
+    def on_key(self, event: Key) -> None:
+        """Handle key press events."""
+        # Check if focused on the table and handle the 'k' key directly
+        table = self.query_one("#process-table", DataTable)
+        if self.focused == table and event.key == "k":
+            event.prevent_default()
+            event.stop()
+            self.action_kill()
+        
+        # Implement double Ctrl+C to exit
+        if event.key == "ctrl+c":
+            event.prevent_default()
+            event.stop()
+            
+            current_time = asyncio.get_event_loop().time()
+            # If pressed twice within 1 second, exit
+            if current_time - self.last_ctrl_c_time < 1.0:
+                self.exit()
+            else:
+                self.notify("Press Ctrl+C again to exit")
+                self.last_ctrl_c_time = current_time
+                
+    # We'll handle the 'k' key directly in the on_key method instead
+    # of trying to dynamically update bindings
     
     def action_kill(self) -> None:
         """Kill the selected process."""
@@ -246,13 +251,42 @@ class PSDoomApp(App):
                 for proc in self.process_manager.filter_processes():
                     if proc['pid'] == self.selected_pid:
                         proc_name = proc.get('name', 'Unknown')
-                        kill_screen = ProcessKillScreen(self.selected_pid, proc_name)
-                        self.mount(kill_screen)
-                        success = self.process_manager.kill_process(self.selected_pid)
                         
-                        # Refresh after kill
-                        asyncio.create_task(self.delayed_refresh())
+                        # Start the process kill sequence with notifications
+                        asyncio.create_task(self.kill_process_with_notifications(self.selected_pid, proc_name))
                         break
+    
+    async def kill_process_with_notifications(self, pid: int, proc_name: str) -> None:
+        """Kill a process with status notifications."""
+        # Initial notification - red for warning
+        self.notify(f"[bold red]KILLING PROCESS: {proc_name} (PID: {pid})[/]", timeout=3)
+        await asyncio.sleep(0.5)
+        
+        # Send status notifications
+        self.notify("[red]Initiating process termination...[/]", timeout=2)
+        await asyncio.sleep(0.7)
+        
+        self.notify("[red]Sending SIGTERM signal...[/]", timeout=2)
+        await asyncio.sleep(0.8)
+        
+        # Actually kill the process here
+        success = self.process_manager.kill_process(pid)
+        
+        self.notify("[yellow]Waiting for process to terminate...[/]", timeout=2)
+        await asyncio.sleep(1)
+        
+        # Show the kaboom animation
+        self.notify("[bold red blink]* * * KABOOM * * *[/]", timeout=3)
+        await asyncio.sleep(1)
+        
+        # Final success notification - green for success
+        if success:
+            self.notify(f"[bold green]Process {proc_name} (PID: {pid}) terminated successfully![/]", timeout=5)
+        else:
+            self.notify(f"[bold orange]Warning: Process {proc_name} (PID: {pid}) may not have terminated correctly[/]", timeout=5)
+        
+        # Refresh process list
+        await self.delayed_refresh()
     
     def action_select_item(self) -> None:
         """Select the current process for more information."""

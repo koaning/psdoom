@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "psdoom"
-version = "0.1.1"
+version = "0.1.2"
 description = "A TUI process manager inspired by the classic Doom game"
 readme = "README.md"
 requires-python = ">=3.8"
