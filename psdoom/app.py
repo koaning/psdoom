@@ -10,7 +10,7 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import Header, Footer, Input, DataTable, Static, Button
-from textual.events import Key
+from textual.events import Key, Resize
 from textual.reactive import reactive
 from textual.binding import Binding
 from textual.keys import Keys
@@ -100,6 +100,75 @@ class PSDoomApp(App):
         self.process_manager = ProcessManager()
         self.last_ctrl_c_time = 0  # Track time of last Ctrl+C press
     
+    def _compute_column_widths(self) -> Dict[int, int]:
+        """Compute responsive column widths based on current terminal width."""
+        # Reserve space for PID
+        pid_width = 7
+        # Some padding/margins and borders
+        safety_padding = 6
+        available_width = max(40, (self.size.width or 100) - (pid_width + safety_padding))
+        # Allocate 35% to name, rest to command
+        name_width = max(15, int(available_width * 0.35))
+        command_width = max(20, available_width - name_width)
+        return {0: pid_width, 1: name_width, 2: command_width}
+
+    def _compute_column_widths_for(self, processes: List[Dict]) -> Dict[int, int]:
+        """Compute data-aware column widths to minimize whitespace.
+        Uses longest visible name/command with sensible bounds.
+        """
+        pid_width = 7
+        safety_padding = 6
+        total_width = self.size.width or 100
+        available = max(20, total_width - (pid_width + safety_padding))
+
+        # Bounds
+        min_name, min_cmd = 12, 20
+        max_name = 48  # cap so name doesn't starve command
+
+        if not processes:
+            # Fallback proportional split
+            name_width = max(min_name, int(available * 0.30))
+            cmd_width = max(min_cmd, available - name_width)
+            return {0: pid_width, 1: name_width, 2: cmd_width}
+
+        # Longest raw lengths in current view
+        longest_name = 0
+        longest_cmd = 0
+        for p in processes:
+            longest_name = max(longest_name, len(p.get("name", "")))
+            longest_cmd = max(longest_cmd, len(p.get("cmdline", "")))
+
+        # Desired widths, bounded
+        desired_name = max(min_name, min(longest_name, max_name))
+        # Start from 30% share but do not exceed desired
+        base_name_share = max(min_name, int(available * 0.30))
+        name_width = min(desired_name, base_name_share)
+        # Ensure command gets the rest with a minimum
+        cmd_width = max(min_cmd, available - name_width)
+
+        # If command would be too tight while name still has room to grow to desired, re-balance
+        if cmd_width < min_cmd and desired_name > name_width:
+            deficit = min_cmd - cmd_width
+            grow = min(deficit, desired_name - name_width)
+            name_width += grow
+            cmd_width = max(min_cmd, available - name_width)
+
+        # If names are very short, shrink name column to actual need to avoid whitespace
+        name_width = min(name_width, longest_name if longest_name >= min_name else min_name)
+        cmd_width = max(min_cmd, available - name_width)
+
+        return {0: pid_width, 1: name_width, 2: cmd_width}
+
+    @staticmethod
+    def _ellipsize(text: str, max_chars: int) -> str:
+        if max_chars <= 0:
+            return ""
+        if len(text) <= max_chars:
+            return text
+        if max_chars <= 1:
+            return text[:max_chars]
+        return text[: max_chars - 1] + "…"
+    
     def compose(self) -> ComposeResult:
         """Compose the UI."""
         yield Header()
@@ -118,29 +187,21 @@ class PSDoomApp(App):
         # Set up the table
         table = self.query_one("#process-table", DataTable)
         table.cursor_type = "row"
-        table.add_columns("PID", "Name", "Command", "Status")
+        table.add_columns("PID", "Name", "Command")
         
-        # Set column widths for better display
-        table.column_widths = {
-            0: 7,      # PID column
-            1: 20,     # Name column
-            2: 100,    # Command column (much more space)
-            3: 10      # Status column
-        }
+        # Initial process list (will also compute data-aware widths)
+        self.refresh_process_list()
         
         # Make table focusable
         table.can_focus = True
         
-        # The 'k' key info is already in the subtitle
-        # No need to change it dynamically
-        
-        # Initial process list
-        self.refresh_process_list()
-        
         # Focus the search input on startup
         self.query_one("#search-input", Input).focus()
-        
-
+    
+    def on_resize(self, event: Resize) -> None:
+        """Recompute column widths on terminal resize and refresh table."""
+        # Refresh will recompute widths from current data
+        self.refresh_process_list()
     
     def refresh_process_list(self) -> None:
         """Refresh the process list based on current search term."""
@@ -149,25 +210,29 @@ class PSDoomApp(App):
         # Filter to only show current user's processes
         current_username = self.process_manager.get_current_username()
         processes = [
-            p for p in self.process_manager.filter_processes(self.search_term) 
+            p for p in self.process_manager.filter_processes(self.search_term) \
             if p.get('username') == current_username
         ]
         
         table = self.query_one("#process-table", DataTable)
         table.clear()
         
+        # Compute data-aware widths and apply
+        widths = self._compute_column_widths_for(processes)
+        table.column_widths = widths
+        name_max = widths[1]
+        cmd_max = widths[2]
+        
         for process in processes:
             pid = str(process.get('pid', ''))
             name = process.get('name', '')
+            name = self._ellipsize(name, name_max)
             
-            # Truncate command line for display
+            # Truncate command line for display based on responsive width
             cmdline = process.get('cmdline', '')
-            if len(cmdline) > 80:
-                cmdline = cmdline[:77] + "..."
-                
-            status = process.get('status', '')
+            cmdline = self._ellipsize(cmdline, cmd_max)
             
-            table.add_row(pid, name, cmdline, status)
+            table.add_row(pid, name, cmdline)
     
     def action_refresh(self) -> None:
         """Refresh the process list."""
